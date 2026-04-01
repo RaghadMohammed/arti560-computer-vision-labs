@@ -16,8 +16,8 @@ This repository contains code, datasets, and exercises for various **computer vi
 | 1  | Image Classification with Custom CNNs |
 | 2  | Transfer Learning |
 | 3  | Vision Transformer (ViT) |
-| 4  |  |
-| 5  |  |
+| 4  | Object Detection |
+| 5  | Image Segmentation |
 | 6  |  |
 | 7  |  |
 | 8  |  |
