@@ -20,7 +20,7 @@ This repository contains code, datasets, and exercises for various **computer vi
 | 5  | Image Segmentation |
 | 6  | Motion Estimation |
 | 7  |  Action Recognition |
-| 8  |  |
+| 8  |  Pose Estimation |
 | 9  |  |
 | 10 |  |
 | 11 |  |
