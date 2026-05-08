@@ -1,116 +1,180 @@
+# FILE: yolov7/yolov7-pose.py
+
+from pathlib import Path
 import time
-import torch
+import sys
+
 import cv2
 import numpy as np
+import torch
 from torchvision import transforms
 
+FILE = Path(__file__).resolve()
+ROOT = FILE.parent
+PROJECT_ROOT = ROOT.parent
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from utils.datasets import letterbox
-from utils.general  import non_max_suppression_kpt
-from utils.plots    import output_to_keypoint, plot_skeleton_kpts
+from utils.general import non_max_suppression_kpt
+from utils.plots import output_to_keypoint, plot_skeleton_kpts
 
 
-def pose_video(frame):
-    mapped_img = frame.copy()
-    # Letterbox resizing.
-    img = letterbox(frame, input_size, stride=64, auto=True)[0]
-    print(img.shape)
-    img_ = img.copy()
-    # Convert the array to 4D.
-    img = transforms.ToTensor()(img)
-    # Convert the array to Tensor.
-    img = torch.tensor(np.array([img.numpy()]))
-    # Load the image into the computation device.
-    img = img.to(device)
-    
-    # Gradients are stored during training, not required while inference.
+INPUT_SIZE = 256
+CONF_THRES = 0.25
+IOU_THRES = 0.65
+NUM_CLASSES = 1
+NUM_KEYPOINTS = 17
+
+VIDEO_NAME = "yoga"  
+VIDEO_PATH = PROJECT_ROOT / "media" / f"{VIDEO_NAME}.mp4"
+WEIGHTS_PATH = ROOT / "yolov7-w6-pose.pt"
+OUTPUT_PATH = PROJECT_ROOT / f"{VIDEO_NAME}_yolov7.avi"
+
+
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda:0")
+else:
+    DEVICE = torch.device("cpu")
+
+print("Selected Device:", DEVICE)
+
+
+def load_model(weights_path: Path) -> torch.nn.Module:
+    if not weights_path.exists():
+        raise FileNotFoundError(f"Weights not found: {weights_path}")
+
+    weights = torch.load(
+        str(weights_path),
+        map_location=torch.device("cpu"),
+        weights_only=False,
+    )
+    model = weights["model"]
+    model = model.float().eval().to(DEVICE)
+    return model
+
+
+def preprocess_frame(frame: np.ndarray) -> torch.Tensor:
+    image = letterbox(frame, INPUT_SIZE, stride=64, auto=True)[0]
+    image = transforms.ToTensor()(image)
+    image = torch.tensor(np.array([image.numpy()]), dtype=torch.float32)
+    image = image.to(DEVICE)
+    return image
+
+
+def run_pose_inference(model: torch.nn.Module, frame: np.ndarray) -> tuple[np.ndarray, float]:
+    image = preprocess_frame(frame)
+
     with torch.no_grad():
-        t1 = time.time()
-        output, _ = model(img)
-        t2 = time.time()
-        fps = 1/(t2 - t1)
-        output = non_max_suppression_kpt(output, 
-                                         0.25,    # Conf. Threshold.
-                                         0.65,    # IoU Threshold.
-                                         nc=1,   # Number of classes.
-                                         nkpt=17, # Number of keypoints.
-                                         kpt_label=True)
-        
+        start = time.time()
+        output, _ = model(image)
+        end = time.time()
+
+        fps = 1.0 / max(end - start, 1e-6)
+        output = non_max_suppression_kpt(
+            output,
+            CONF_THRES,
+            IOU_THRES,
+            nc=NUM_CLASSES,
+            nkpt=NUM_KEYPOINTS,
+            kpt_label=True,
+        )
         output = output_to_keypoint(output)
 
-    # Change format [b, c, h, w] to [h, w, c] for displaying the image.
-    nimg = img[0].permute(1, 2, 0) * 255
-    nimg = nimg.cpu().numpy().astype(np.uint8)
-    nimg = cv2.cvtColor(nimg, cv2.COLOR_RGB2BGR)
+    rendered = image[0].permute(1, 2, 0) * 255
+    rendered = rendered.cpu().numpy().astype(np.uint8)
+    rendered = cv2.cvtColor(rendered, cv2.COLOR_RGB2BGR)
 
     for idx in range(output.shape[0]):
-        plot_skeleton_kpts(nimg, output[idx, 7:].T, 3)
-        
-    return nimg, fps
+        plot_skeleton_kpts(rendered, output[idx, 7:].T, 3)
+
+    cv2.putText(
+        rendered,
+        f"FPS : {fps:.2f}",
+        (140, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        rendered,
+        "YOLOv7 Pose",
+        (20, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA,
+    )
+
+    return rendered, fps
 
 
-#------------------------------------------------------------------------------#
-# Change forward pass input size.
-input_size = 256
+def create_video_writer(model: torch.nn.Module, video_path: Path, output_path: Path) -> tuple[cv2.VideoCapture, cv2.VideoWriter]:
+    if not video_path.exists():
+        raise FileNotFoundError(f"Video not found: {video_path}")
 
-#---------------------------INITIALIZATIONS------------------------------------#
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
 
-# Select the device based on hardware configs.
-if torch.cuda.is_available():
-    device = torch.device("cuda:0")
-else:
-    device = torch.device("cpu")
-print('Selected Device : ', device)
+    ret, first_frame = cap.read()
+    if not ret or first_frame is None:
+        cap.release()
+        raise RuntimeError(f"Could not read first frame from: {video_path}")
 
-# Load keypoint detection model.
-weights = torch.load('yolov7-w6-pose.pt', map_location=torch.device('cpu'), weights_only=False)
-model = weights['model']
-# Load the model in evaluation mode.
-_ = model.float().eval()
-# Load the model to computation device [cpu/gpu/tpu]
-model.to(device)
+    processed_frame, _ = run_pose_inference(model, first_frame)
+    height, width, _ = processed_frame.shape
 
-# Provide the list of paths to your chosen videos her
-videos = [
-        'skydiving',
-        'far-away']
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0:
+        fps = 10.0
 
-file_name = videos[0] + '.mp4'
-vid_path = '../media/' + file_name
+    writer = cv2.VideoWriter(
+        str(output_path),
+        cv2.VideoWriter_fourcc("M", "J", "P", "G"),
+        fps,
+        (width, height),
+    )
 
-cap = cv2.VideoCapture(vid_path)
-fps = int(cap.get(cv2.CAP_PROP_FPS))
-ret, frame = cap.read()
-h, w, _ = frame.shape
-
-# May need to change the w, h as letterbox function reshapes the image.
-#out = cv2.VideoWriter('./' + file_name + '_yolov7', 
-#                       cv2.VideoWriter_fourcc(*'mp4v'), 
-#                       fps, (w, h))
-
-out = cv2.VideoWriter(f"{save_name}_yolo7.avi",cv2.VideoWriter_fourcc('M','J','P','G'), 10, w,h)
-
-#-------------------------------------------------------------------------------#
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    return cap, writer
 
 
-if __name__ == '__main__':
+def main() -> None:
+    model = load_model(WEIGHTS_PATH)
+    cap, writer = create_video_writer(model, VIDEO_PATH, OUTPUT_PATH)
+
+    frame_count = 0
+
     while True:
         ret, frame = cap.read()
-        
         if not ret:
-            print('Unable to read frame. Exiting ..')
+            print("\nUnable to read frame. Exiting ..")
             break
 
-        img, fps_ = pose_video(frame)
+        rendered_frame, fps = run_pose_inference(model, frame)
+        writer.write(rendered_frame)
+        cv2.imshow("YOLOv7 Pose Output", rendered_frame)
 
-        cv2.putText(img, 'FPS : {:.2f}'.format(fps_), (200, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2, cv2.LINE_AA)
-        cv2.putText(img, 'YOLOv7', (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2, cv2.LINE_AA)
+        frame_count += 1
+        print(f"Processed frame {frame_count} | FPS {fps:.2f}", end="\r")
 
-        cv2.imshow('Output', img[...,::-1])
-        out.write(img[...,::-1])
-        key = cv2.waitKey(1)
-        if key == ord('q'):
-        	break
+        if cv2.waitKey(1) == ord("q"):
+            print("\nStopped by user.")
+            break
 
     cap.release()
-    out.release()
+    writer.release()
     cv2.destroyAllWindows()
+
+    print("\nYOLOv7 Pose completed successfully.")
+    print(f"Input : {VIDEO_PATH}")
+    print(f"Output: {OUTPUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()

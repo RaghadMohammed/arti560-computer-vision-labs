@@ -36,8 +36,7 @@ hasFrame, frame = cap.read()
 
 save_name = os.path.splitext(os.path.basename(input_source))[0]
 print(save_name)
-vid_writer = cv2.VideoWriter(f"{save_name}_openpose.avi",cv2.VideoWriter_fourcc('M','J','P','G'), 10, (frame.shape[1],frame.shape[0]))
-
+vid_writer = cv2.VideoWriter(f"{save_name}_openpose.mp4",cv2.VideoWriter_fourcc(*'mp4v'), 10, (frame.shape[1],frame.shape[0]))
 net = cv2.dnn.readNetFromCaffe(protoFile, weightsFile)
 if args.device == "cpu":
     net.setPreferableBackend(cv2.dnn.DNN_TARGET_CPU)
